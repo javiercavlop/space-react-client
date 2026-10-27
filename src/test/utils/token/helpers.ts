@@ -61,3 +61,37 @@ export function updateJwtExp(token: string, secondsAhead: number): string {
 export function createFakeJwt(payload: Record<string, number | object | string>) {    
   return `header.${btoa(JSON.stringify(payload))}.signature`;
 }
+/**
+ * Helper to create an unsigned JWT the way a JOSE library encodes it: base64url (no padding) of
+ * the UTF-8 JSON, unlike `createFakeJwt`, which only handles Latin-1 and standard base64.
+ */
+export function createJwt(payload: Record<string, unknown>, header: Record<string, unknown> = { alg: 'ES256', kid: 'k1' }) {
+  const encode = (value: unknown) => {
+    const bytes = new TextEncoder().encode(JSON.stringify(value));
+    let binary = '';
+    bytes.forEach((b) => (binary += String.fromCharCode(b)));
+    return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  };
+  return `${encode(header)}.${encode(payload)}.signature`;
+}
+
+export const ORGANIZATION_ID = '6630a1b2c3d4e5f6a7b8c9d0';
+
+/**
+ * Payload of a token issued by SPACE with per-organization userIds (space#80): `sub` is an opaque
+ * URN, the userId is in its own claim, plus `organizationId`, `aud` and `iss`. Older servers only
+ * send the bare userId in `sub` (see TEST_TOKEN above).
+ */
+export function newServerPayload(userId: string, secondsAhead = 60) {
+  const now = Math.floor(Date.now() / 1000);
+  return {
+    sub: `urn:space:${ORGANIZATION_ID}:${encodeURIComponent(userId)}`,
+    userId,
+    organizationId: ORGANIZATION_ID,
+    aud: ORGANIZATION_ID,
+    iss: 'space',
+    iat: now,
+    exp: now + secondsAhead,
+    features: { 'zoom-meetings': { eval: true } },
+  };
+}
