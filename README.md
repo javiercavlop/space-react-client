@@ -320,6 +320,31 @@ const userId = payload ? pricingTokenUserId(payload) : null;
 
 The token payload is decoded as base64url UTF-8 JSON (as every JWT is encoded), so userIds outside Latin-1 come out intact.
 
+#### Verifying pricing tokens (opt-in)
+
+`tokenService.update(token)` decodes a token; it does not check its signature, and it does not need to when the token comes straight from your own backend over HTTPS. Apps that receive tokens through a channel they do not control (another frame via `postMessage`, a token kept in storage, a third-party embed) can verify them first with the public keys SPACE publishes. Verification is a separate entry point, so apps that do not import it do not bundle it (nor its dependency, [`jose`](https://github.com/panva/jose)):
+
+```tsx
+import { PricingTokenVerifier } from 'space-react-client/verify';
+
+// One verifier per SPACE, reused (it caches the keys).
+const verifier = new PricingTokenVerifier({ url: 'https://space.example.com', organizationId: 'my-org-id' });
+
+const payload = await verifier.verify(token); // throws if the token cannot be trusted
+tokenService.update(token);
+```
+
+It needs SPACE with the capability `pricing-token-jwks` (tokens signed with ES256, public keys at `GET {url}/api/v1/.well-known/jwks.json`, no API key; SPACE's CORS settings, `ALLOWED_ORIGINS`, must allow your origin). It checks:
+
+- the ES256 signature by a key of the JWKS, chosen by the token's `kid`; any other `alg` (`HS256`, `none`, ...) is rejected, and so is a token with a `jwk`, `jku`, `x5u` or `x5c` header;
+- `exp`, required (`clockToleranceSeconds`, default 0);
+- `iss` (`issuer`, default `space`, the `JWT_ISSUER` of your SPACE);
+- `aud` and `organizationId`: the expected organization, required in the options or per call (`verifier.verify(token, { organizationId })`).
+
+The keys are cached for the `max-age` of the JWKS response (5 minutes from SPACE) and fetched again, at most once per `refetchCooldownMs` (30 s), when a token names an unknown `kid`. Errors: `PricingTokenSignatureError`, `PricingTokenExpiredError`, `PricingTokenAudienceError`, `PricingTokenIssuerError`, `PricingTokenUnknownKeyError`, and `PricingTokenVerificationError` (their base class) with `code` `PRICING_TOKEN_INVALID` or `PRICING_TOKEN_JWKS_UNAVAILABLE`; `SpaceFeatureUnsupportedError` (`capability: 'pricing-token-jwks'`) when SPACE does not publish its keys.
+
+A check in the browser does not replace the checks of your backend: code running in the page can be changed by whoever controls the page. Authorize requests on the server (for example with `space-node-client`'s `verifyPricingToken`).
+
 ---
 
 ## 🛡️ Security Considerations
@@ -327,6 +352,7 @@ The token payload is decoded as base64url UTF-8 JSON (as every JWT is encoded), 
 - **Do not expose SPACE API keys in production.**  
   Instead, issue Pricing Tokens from your backend and deliver them to the client.  
 - Tokens are validated client-side with the `exp` claim. Rotate or shorten TTLs as needed.  
+- To check the signature of a token in the browser, use the opt-in `space-react-client/verify` entry point (see [Verifying pricing tokens](#verifying-pricing-tokens-opt-in)).  
 
 ---
 
