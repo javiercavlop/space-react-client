@@ -1,7 +1,33 @@
 import type { PricingTokenPayload, PricingTokenSubscription } from '@/types';
 
+/** The payload of a JWT: base64url (RFC 7515), UTF-8 JSON. Not verified. */
 function parseJwt(token: string) {
-  return JSON.parse(atob(token.split('.')[1]));
+  const segment = token.split('.')[1] ?? '';
+  const base64 = segment.replace(/-/g, '+').replace(/_/g, '/');
+  const binary = atob(base64 + '='.repeat((4 - (base64.length % 4)) % 4));
+  const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
+  return JSON.parse(new TextDecoder().decode(bytes));
+}
+
+/**
+ * The userId a pricing token was issued for.
+ *
+ * Reads the `userId` claim. Only tokens without it (issued by SPACE versions that predate
+ * per-organization userIds, where `sub` is the bare userId) fall back to `sub`. `sub` is never
+ * parsed: on newer servers it is an opaque `urn:space:...` subject. This does not verify the token.
+ *
+ * @returns The userId, or `null` if the token has neither claim.
+ * @throws TypeError if the token has a `userId` claim that is not a string.
+ */
+export function pricingTokenUserId(payload: Partial<PricingTokenPayload>): string | null {
+  const { userId } = payload;
+  if (userId !== undefined && userId !== null) {
+    if (typeof userId !== 'string') {
+      throw new TypeError('The userId claim of the pricing token is not a string');
+    }
+    return userId;
+  }
+  return typeof payload.sub === 'string' ? payload.sub : null;
 }
 
 /**
@@ -57,6 +83,18 @@ export class TokenService {
     }
 
     return (this.tokenPayload as PricingTokenPayload).subscription ?? null;
+  }
+
+  /**
+   * Retrieves the userId the stored pricing token was issued for (see `pricingTokenUserId`).
+   * @returns The userId, or `null` if there is no valid token.
+   */
+  getUserId(): string | null {
+    if (!this._validToken()) {
+      return null;
+    }
+
+    return pricingTokenUserId(this.tokenPayload as PricingTokenPayload);
   }
 
   /**

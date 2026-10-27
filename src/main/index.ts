@@ -7,4 +7,6 @@ export { useSubscription } from './hooks/useSubscription';
 
 export { Feature, On, Default, Loading, ErrorFallback } from './components/Feature';
 
+export { pricingTokenUserId } from './services/token';
+
 export type * from './types';

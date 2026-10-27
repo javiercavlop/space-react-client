@@ -288,12 +288,37 @@ useEffect(() => {
 - `update(token)` — Validates & stores a pricing token.  
 - `getPayload()` — Return parsed token payload.  
 - `getSubscription()` — Return the token's `subscription` claim, or `null`.  
+- `getUserId()` — Return the userId the token was issued for (see below), or `null`.  
 - `evaluateFeature(featureId)` — Returns `true | false | null`.  
 
 Token expectations:  
 - `exp: number` — UNIX expiration.  
 - `features: Record<string, { eval: boolean; limit?: number | null; used?: number | null }>`  
 - `subscription?: { contractedServices, subscriptionPlans, subscriptionAddOns, contractVersion }` — optional; present in tokens from SPACE versions with the subscription-change API (typed as `PricingTokenPayload` / `PricingTokenSubscription`).  
+- `userId?`, `organizationId?`, `aud?`, `iss?` — optional; present in tokens from SPACE versions with per-organization userIds (capability `contract-userid-per-org`).  
+
+#### Token claims: `userId`, `organizationId`, `aud`, `iss`
+
+A userId is unique only within its organization, so SPACE versions with per-organization userIds issue tokens with these claims:
+
+| Claim | Value |
+| --- | --- |
+| `sub` | `urn:space:<organizationId>:<percent-encoded userId>`. Opaque: do not parse it. |
+| `userId` | The userId as stored in SPACE (not encoded). |
+| `organizationId` | The organization of the contract. |
+| `aud` | The organization the token is for (same value as `organizationId`). |
+| `iss` | The SPACE server: its `JWT_ISSUER`, `space` by default. |
+
+Tokens of older SPACE versions only have the bare userId in `sub`, so the new claims are optional in `PricingTokenPayload`. `tokenService.getUserId()` and `pricingTokenUserId(payload)` return the `userId` claim and fall back to `sub` only when the token has no `userId` claim (an older server); they never parse the URN. Code that used `payload.sub` as the userId should switch to them:
+
+```tsx
+import { pricingTokenUserId, usePricingTokenPayload } from 'space-react-client';
+
+const payload = usePricingTokenPayload();
+const userId = payload ? pricingTokenUserId(payload) : null;
+```
+
+The token payload is decoded as base64url UTF-8 JSON (as every JWT is encoded), so userIds outside Latin-1 come out intact.
 
 ---
 
