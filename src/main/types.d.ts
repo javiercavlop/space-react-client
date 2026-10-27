@@ -1,4 +1,5 @@
 import React from 'react';
+import type { EventDeduplicationOptions } from './types/Events';
 
 export type { SpaceClient } from './clients/SpaceClient';
 export type { TokenService } from './services/token';
@@ -10,6 +11,7 @@ export type SpaceEvents =
   | 'pricing_actived'
   | 'service_disabled'
   | ContractEvents
+  | 'resync'
   | 'error';
 
 /**
@@ -34,6 +36,12 @@ export interface SpaceConfiguration {
    */
   organizationId?: string;
   allowConnectionWithSpace: boolean
+  /**
+   * Drops repeated SPACE events by `eventId` (a consumer can receive one event more than once).
+   * On by default, remembering the last 10,000 ids for up to 10 minutes; `false` turns it off.
+   * Events without `eventId` (older SPACE) are always delivered.
+   */
+  eventDeduplication?: EventDeduplicationOptions | false;
 }
 
 export interface SpaceClientContext{

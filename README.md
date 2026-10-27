@@ -235,6 +235,7 @@ export function InjectTokenFromServer() {
 - **`pricing_archived`** — A pricing moved from active → archived.  
 - **`service_disabled`** — A service was disabled.  
 - **`contract_created`**, **`contract_novated`**, **`contract_deleted`**, **`contract_renewed`** — A contract of the API key's organisation was created, changed subscription, was deleted or renewed.  
+- **`resync`** — A namespace (`pricings` or `contracts`) connected or reconnected; see [Delivery guarantees](#delivery-guarantees).  
 - **`error`** — Connection or processing error (including a rejected API key on the contract events namespace).  
 
 Pricing events (`pricing_*`, `service_disabled`) include the following object:  
@@ -278,6 +279,34 @@ useEffect(() => {
   return () => events.close();
 }, [tokenService]);
 ```
+
+#### Event ids and delivery guarantees
+
+Pricing and contract listeners get a second argument, `SpaceEventMeta`: `code`, `eventId` (the same in every copy of one event), `occurredAt` (a `Date`: when SPACE stored the change) and `rawOccurredAt` (the string as sent). SPACE sends `eventId` and `occurredAt` from the version that advertises `contract-event-ids` in `X-Space-Capabilities`; with an older SPACE they are `undefined`.
+
+```tsx
+spaceClient.on('contract_novated', (details, meta) => {
+  console.log(meta.eventId, meta.occurredAt, details.contractVersion);
+});
+```
+
+<a id="delivery-guarantees"></a>SPACE events are hints that something changed, not a log of the changes:
+
+- **At most once per connection, no replay.** While the client is disconnected or reconnecting, events are lost, and SPACE does not resend them.
+- **Repeats are possible.** A consumer with several connections gets one copy per connection, all with the same `eventId`. The client drops a repeated `eventId` before calling your listener (it remembers the last 10,000 ids for up to 10 minutes; events without `eventId` are always delivered). Configure it with `eventDeduplication: { maxEntries, windowMs }` in the client configuration, or turn it off with `eventDeduplication: false`.
+- **No ordering.** Never order events by `eventId` (compare it for equality only), and do not compare `occurredAt` across SPACE instances. `contractVersion` is a hash, not a counter.
+
+So treat a contract event as a reason to re-read (for the browser, to reload the Pricing Token), not as the new state. After a reconnection, re-read too, because what changed meanwhile was not announced. The `resync` event (`{ namespace, reconnect }`, with `reconnect` `false` on a namespace's first connection) tells you when:
+
+```tsx
+spaceClient.on('resync', ({ namespace, reconnect }) => {
+  if (namespace === 'contracts' && reconnect && currentUserId) {
+    spaceClient.setUserId(currentUserId); // reloads the Pricing Token
+  }
+});
+```
+
+Token-only apps get the same guarantees from their backend's SDK: `space-node-client` documents them and offers the same `resync` event.
 
 ---
 

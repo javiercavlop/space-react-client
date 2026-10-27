@@ -1,5 +1,12 @@
 import { TinyEmitter } from 'tiny-emitter';
-import type { ContractEvents, SpaceEvents, SpaceConfiguration } from '@/types';
+import type {
+  ContractEvents,
+  ResyncInfo,
+  SpaceEventMeta,
+  SpaceEvents,
+  SpaceConfiguration,
+} from '@/types';
+import { EventIdWindow } from '@/utils/EventIdWindow';
 import axios, { AxiosInstance } from 'axios';
 import { TokenService } from '@/services/token';
 import { io, Socket } from 'socket.io-client';
@@ -18,6 +25,7 @@ const SUPPORTED_EVENTS: SpaceEvents[] = [
   'pricing_actived',
   'service_disabled',
   ...CONTRACT_EVENTS,
+  'resync',
   'error',
 ];
 
@@ -49,7 +57,14 @@ export class SpaceClient {
    * Callbacks registered for each contract event, kept here (not read from the emitter) to know
    * when the `/contracts` namespace is still needed.
    */
-  private readonly contractListeners = new Map<ContractEvents, Set<(data: any) => void>>();
+  private readonly contractListeners = new Map<ContractEvents, Set<(...args: any[]) => void>>();
+  /** The `eventId`s seen recently, shared by both namespaces; `null` when deduplication is off. */
+  private readonly eventIds: EventIdWindow | null;
+  /** Whether each namespace connected before, to tell a reconnection from the first connection. */
+  private readonly connectedBefore: Record<ResyncInfo['namespace'], boolean> = {
+    pricings: false,
+    contracts: false,
+  };
   private readonly axios: AxiosInstance;
   private readonly emitter: any;
   public readonly token: TokenService;
@@ -70,6 +85,9 @@ export class SpaceClient {
     this.pricingSocketNamespace = this.socketClient.io.socket('/pricings');
     this.apiKey = config.apiKey;
     this.organizationId = config.organizationId;
+    const dedup = config.eventDeduplication;
+    this.eventIds =
+      dedup === false || dedup?.enabled === false ? null : new EventIdWindow(dedup ?? {});
     this.emitter = new TinyEmitter();
     this.token = new TokenService();
 
@@ -100,11 +118,14 @@ export class SpaceClient {
     this.pricingSocketNamespace.on('connect', () => {
       console.log('Connected to SPACE');
       this.emitter.emit('synchronized', 'WebSocket connection established');
+      this.emitResync('pricings');
     });
 
     this.pricingSocketNamespace.on('message', (data: any) => {
+      const meta = this.acceptEvent(data);
+      if (!meta) return;
       const event = (data.code as SpaceEvents).toLowerCase();
-      this.emitter.emit(event, data.details);
+      this.emitter.emit(event, data.details, meta);
     });
 
     this.pricingSocketNamespace.on('connect_error', (error: any) => {
@@ -125,10 +146,16 @@ export class SpaceClient {
             : { apiKey: this.apiKey },
       });
 
+      this.contractSocketNamespace.on('connect', () => {
+        this.emitResync('contracts');
+      });
+
       this.contractSocketNamespace.on('message', (data: any) => {
+        const meta = this.acceptEvent(data);
+        if (!meta) return;
         const event = String(data?.code ?? '').toLowerCase();
         if (isContractEvent(event)) {
-          this.emitter.emit(event, data.details);
+          this.emitter.emit(event, data.details, meta);
         }
       });
 
@@ -140,6 +167,34 @@ export class SpaceClient {
     if (!this.contractSocketNamespace.connected && !this.contractSocketNamespace.active) {
       this.contractSocketNamespace.connect();
     }
+  }
+
+  /**
+   * Reads the top-level fields of an event, or returns `null` if it repeats an `eventId` seen in
+   * the deduplication window. Events without `eventId` are always accepted.
+   */
+  private acceptEvent(data: any): SpaceEventMeta | null {
+    const meta: SpaceEventMeta = { code: String(data?.code ?? '') };
+    if (typeof data?.eventId === 'string' && data.eventId !== '') {
+      if (this.eventIds && !this.eventIds.accept(data.eventId)) {
+        return null;
+      }
+      meta.eventId = data.eventId;
+    }
+    if (typeof data?.occurredAt === 'string') {
+      meta.rawOccurredAt = data.occurredAt;
+      const occurredAt = new Date(data.occurredAt);
+      if (!Number.isNaN(occurredAt.getTime())) {
+        meta.occurredAt = occurredAt;
+      }
+    }
+    return meta;
+  }
+
+  private emitResync(namespace: ResyncInfo['namespace']) {
+    const info: ResyncInfo = { namespace, reconnect: this.connectedBefore[namespace] };
+    this.connectedBefore[namespace] = true;
+    this.emitter.emit('resync', info);
   }
 
   private hasContractListeners(): boolean {
@@ -166,10 +221,17 @@ export class SpaceClient {
    * `contract_deleted`). They require connecting with an API key that SPACE accepts for that
    * namespace (member user keys also need `organizationId` in the configuration); token-only apps should get contract changes from their
    * backend instead.
+   *
+   * Pricing and contract listeners also receive a `SpaceEventMeta` (`code`, `eventId`,
+   * `occurredAt`) as a second argument; a repeated `eventId` is not delivered again. `resync`
+   * fires each time a namespace connects, with a `ResyncInfo`: SPACE does not replay events, so
+   * after a reconnection re-read what you hold.
    * @throws Will throw an error if the event is not recognized.
    * @throws Will throw an error if the callback is not a function.
    */
-  on(event: SpaceEvents, callback: (data: any) => void) {
+  on(event: 'resync', callback: (info: ResyncInfo) => void): void;
+  on(event: SpaceEvents, callback: (data: any, meta: SpaceEventMeta) => void): void;
+  on(event: SpaceEvents, callback: (...args: any[]) => void): void {
     if (typeof callback !== 'function') {
       throw new Error(`Callback for event '${event}' must be a function.`);
     }
@@ -193,7 +255,7 @@ export class SpaceClient {
    * @param event (optional) The event to remove listeners for. If omitted, removes all listeners.
    * @param callback (optional) The specific callback to remove.
    */
-  public off(event?: SpaceEvents, callback?: (data: any) => void) {
+  public off(event?: SpaceEvents, callback?: (...args: any[]) => void) {
     if (event && callback) {
       this.emitter.off(event, callback);
       if (isContractEvent(event)) this.contractListeners.get(event)?.delete(callback);
