@@ -15,6 +15,6 @@
       "@/*": ["src/main/*"]
     }
   },
-  "include": ["src/main/index.ts", "src/test/**/*.test.ts", "src/test/**/*.test.tsx"],
+  "include": ["src/main/index.ts", "src/main/verify.ts", "src/test/**/*.test.ts", "src/test/**/*.test.tsx"],
   "exclude": ["node_modules", "dist"]
 }
