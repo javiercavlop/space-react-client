@@ -1,5 +1,22 @@
 import { TinyEmitter } from 'tiny-emitter';
-import type { SpaceEvents, SpaceConfiguration } from '@/types';
+import type { ContractEvents, SpaceEvents, SpaceConfiguration } from '@/types';
+
+const CONTRACT_EVENTS: ContractEvents[] = [
+  'contract_created',
+  'contract_novated',
+  'contract_deleted',
+  'contract_renewed',
+];
+
+const SUPPORTED_EVENTS: SpaceEvents[] = [
+  'synchronized',
+  'pricing_created',
+  'pricing_archived',
+  'pricing_actived',
+  'service_disabled',
+  ...CONTRACT_EVENTS,
+  'error',
+];
 import axios, { AxiosInstance } from 'axios';
 import { TokenService } from '@/services/token';
 import { io, Socket } from 'socket.io-client';
@@ -16,6 +33,11 @@ export class SpaceClient {
    * The WebSocket namespace specifically for pricing-related events.
    */
   private readonly pricingSocketNamespace: Socket;
+  /**
+   * The authenticated WebSocket namespace for contract events of the API key's organisation.
+   * Opened lazily, when the first contract event listener is registered.
+   */
+  private contractSocketNamespace: Socket | null = null;
   private readonly apiKey: string;
   private readonly axios: AxiosInstance;
   private readonly emitter: any;
@@ -51,6 +73,7 @@ export class SpaceClient {
   }
 
   disconnectWebSocket() {
+    this.contractSocketNamespace?.disconnect();
     if (this.pricingSocketNamespace.connected) {
       this.pricingSocketNamespace.disconnect();
       this.emitter.off(); // Remove all listeners
@@ -77,6 +100,37 @@ export class SpaceClient {
   }
 
   /**
+   * Opens the authenticated `/contracts` namespace, sending the API key in the handshake.
+   */
+  private connectContractSocket() {
+    if (!this.contractSocketNamespace) {
+      this.contractSocketNamespace = this.socketClient.io.socket('/contracts', {
+        auth: { apiKey: this.apiKey },
+      });
+
+      this.contractSocketNamespace.on('message', (data: any) => {
+        const event = String(data?.code ?? '').toLowerCase();
+        if ((CONTRACT_EVENTS as string[]).includes(event)) {
+          this.emitter.emit(event, data.details);
+        }
+      });
+
+      this.contractSocketNamespace.on('connect_error', (error: any) => {
+        this.emitter.emit('error', error);
+      });
+    }
+
+    if (!this.contractSocketNamespace.connected && !this.contractSocketNamespace.active) {
+      this.contractSocketNamespace.connect();
+    }
+  }
+
+  private hasContractListeners(): boolean {
+    const registered = this.emitter.e ?? {};
+    return CONTRACT_EVENTS.some((event) => (registered[event]?.length ?? 0) > 0);
+  }
+
+  /**
    * Listen to SPACE and connection events.
    * @param event The event key to listen for.
    * @param callback The callback function to execute when the event is emitted.
@@ -86,6 +140,12 @@ export class SpaceClient {
    *   console.log('Pricing created:', data);
    * });
    * ```
+   *
+   * Contract events (`contract_created`, `contract_novated`, `contract_deleted`,
+   * `contract_renewed`) open the authenticated `/contracts` namespace on first use and carry
+   * `{ userId, organizationId, contractVersion, services }`. They require connecting with an API key
+   * that SPACE accepts for that namespace; token-only apps should get contract changes from their
+   * backend instead.
    * @throws Will throw an error if the event is not recognized.
    * @throws Will throw an error if the callback is not a function.
    */
@@ -94,20 +154,15 @@ export class SpaceClient {
       throw new Error(`Callback for event '${event}' must be a function.`);
     }
 
-    if (
-      [
-        'synchronized',
-        'pricing_created',
-        'pricing_archived',
-        'pricing_actived',
-        'service_disabled',
-        'error',
-      ].indexOf(event) === -1
-    ) {
+    if (SUPPORTED_EVENTS.indexOf(event) === -1) {
       throw new Error(`Event '${event}' is not recognized.`);
     }
 
     this.emitter.on(event, callback);
+
+    if ((CONTRACT_EVENTS as string[]).includes(event)) {
+      this.connectContractSocket();
+    }
   }
 
   /**
@@ -122,6 +177,10 @@ export class SpaceClient {
       this.emitter.off(event);
     } else {
       this.emitter.off();
+    }
+
+    if (!event || !this.hasContractListeners()) {
+      this.contractSocketNamespace?.disconnect();
     }
   }
 

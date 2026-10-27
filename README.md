@@ -176,6 +176,26 @@ export function InjectTokenFromServer() {
 - **`useTokenService(): TokenService`**  
   Manage Pricing Tokens in context. Available even if live connection is disabled.  
 
+- **`usePricingTokenPayload<T>(): T | null`**  
+  The decoded payload of the current Pricing Token (`null` if missing or expired). Re-renders on token updates.  
+
+- **`useSubscription(): PricingTokenSubscription | null`**  
+  The subscription carried by the current Pricing Token: `{ contractedServices, subscriptionPlans, subscriptionAddOns, contractVersion }`. Re-renders on token updates and needs no connection to SPACE, so it works in token-only mode. Returns `null` without a valid token, or when the token was issued by a SPACE version that does not include the `subscription` claim.  
+
+  ```tsx
+  import { useSubscription } from 'space-react-client';
+
+  export function CurrentPlan() {
+    const subscription = useSubscription();
+    if (!subscription) return <span>No plan information</span>;
+    return (
+      <span>
+        Plan {subscription.subscriptionPlans['acme']} (pricing {subscription.contractedServices['acme']})
+      </span>
+    );
+  }
+  ```
+
 ---
 
 ### UI Components
@@ -213,15 +233,49 @@ export function InjectTokenFromServer() {
 - **`pricing_activated`** — A pricing moved from archived → active.  
 - **`pricing_archived`** — A pricing moved from active → archived.  
 - **`service_disabled`** — A service was disabled.  
-- **`error`** — Connection or processing error.  
+- **`contract_created`**, **`contract_novated`**, **`contract_deleted`**, **`contract_renewed`** — A contract of the API key's organisation was created, changed subscription, was deleted or renewed.  
+- **`error`** — Connection or processing error (including a rejected API key on the contract events namespace).  
 
-All events (except `synchronized` and `error`) include the following object:  
+Pricing events (`pricing_*`, `service_disabled`) include the following object:  
 
 ```typescript
 {
   serviceName: string;       // REQUIRED: The name of the service that triggered the event
   pricingVersion?: string;   // OPTIONAL: The version of the pricing involved
 }
+```
+
+Contract events include:
+
+```typescript
+{
+  userId: string;
+  organizationId: string;
+  contractVersion: string; // version of the contract after the change
+  services: string[];      // services affected
+}
+```
+
+> [!IMPORTANT]
+> Contract events travel over SPACE's authenticated `/contracts` namespace. The client opens it (sending `apiKey` in the handshake) only when you register the first contract listener, and closes it when the last one is removed. They therefore **only work when the client connects to SPACE with an API key** (`allowConnectionWithSpace: true`).
+>
+> **Token-only apps** (`allowConnectionWithSpace: false`, the recommended production setup, since the browser holds no SPACE key) do not receive contract events. Let your backend listen to them with [`space-node-client`](https://github.com/Alex-GF/space-node-client) (`client.on('contract_novated', ...)`) and push a fresh Pricing Token to the user's sessions (or have the page refetch it after a plan change). `useSubscription()` and `<Feature>` update as soon as `tokenService.update(newToken)` runs.
+
+```tsx
+// Only with allowConnectionWithSpace: true and an API key in the browser (development, internal tools).
+spaceClient.on('contract_novated', ({ userId }) => {
+  if (userId === currentUserId) spaceClient.setUserId(userId); // reloads the Pricing Token
+});
+```
+
+```tsx
+// Token-only: your backend tells the page that the contract changed (SSE, WebSocket, polling, ...).
+const tokenService = useTokenService();
+useEffect(() => {
+  const events = new EventSource('/api/my-contract-events');
+  events.onmessage = async () => tokenService.update(await (await fetch('/api/my-pricing-token')).text());
+  return () => events.close();
+}, [tokenService]);
 ```
 
 ---
@@ -232,11 +286,13 @@ All events (except `synchronized` and `error`) include the following object:
 
 - `update(token)` — Validates & stores a pricing token.  
 - `getPayload()` — Return parsed token payload.  
+- `getSubscription()` — Return the token's `subscription` claim, or `null`.  
 - `evaluateFeature(featureId)` — Returns `true | false | null`.  
 
 Token expectations:  
 - `exp: number` — UNIX expiration.  
 - `features: Record<string, { eval: boolean; limit?: number | null; used?: number | null }>`  
+- `subscription?: { contractedServices, subscriptionPlans, subscriptionAddOns, contractVersion }` — optional; present in tokens from SPACE versions with the subscription-change API (typed as `PricingTokenPayload` / `PricingTokenSubscription`).  
 
 ---
 

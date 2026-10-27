@@ -1,3 +1,5 @@
+import type { PricingTokenPayload, PricingTokenSubscription } from '@/types';
+
 function parseJwt(token: string) {
   return JSON.parse(atob(token.split('.')[1]));
 }
@@ -42,6 +44,19 @@ export class TokenService {
     }
 
     return this.tokenPayload![key];
+  }
+
+  /**
+   * Retrieves the subscription the stored pricing token was issued for (claim `subscription`).
+   * @returns The subscription, or `null` if there is no valid token or the token does not carry it
+   * (tokens issued by SPACE versions without the subscription claim).
+   */
+  getSubscription(): PricingTokenSubscription | null {
+    if (!this._validToken()) {
+      return null;
+    }
+
+    return (this.tokenPayload as PricingTokenPayload).subscription ?? null;
   }
 
   /**
