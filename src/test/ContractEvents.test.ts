@@ -1,17 +1,23 @@
 // @vitest-environment node
-import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
+import { describe, it, expect, expectTypeOf, beforeAll, afterAll, afterEach } from 'vitest';
 import { SpaceClient } from '../main/clients/SpaceClient';
 import type { ContractEventDetails, SpaceEvents } from '@/index';
 import { MockSpaceEvents, waitUntil } from './utils/space/mockSpace';
 
 const API_KEY = 'test-org-key';
+const USER_KEY = 'usr_member-key';
 
 describe('SpaceClient contract events against a mocked SPACE', () => {
-  const space = new MockSpaceEvents(API_KEY);
+  const space = new MockSpaceEvents(API_KEY, USER_KEY);
   const clients: SpaceClient[] = [];
 
-  function newClient(apiKey = API_KEY) {
-    const client = new SpaceClient({ url: space.url, apiKey, allowConnectionWithSpace: true });
+  function newClient(apiKey = API_KEY, organizationId?: string) {
+    const client = new SpaceClient({
+      url: space.url,
+      apiKey,
+      organizationId,
+      allowConnectionWithSpace: true,
+    });
     clients.push(client);
     return client;
   }
@@ -59,7 +65,8 @@ describe('SpaceClient contract events against a mocked SPACE', () => {
       client.on('contract_novated', (data) => resolve(data)),
     );
     await waitUntil(() => space.contractSockets.length === 1);
-    expect(space.handshakes[0].apiKey).toBe(API_KEY);
+    // Organisation keys: only the key goes in the handshake.
+    expect(space.handshakes[0]).toEqual({ apiKey: API_KEY });
 
     const details = {
       userId: 'user-1',
@@ -110,5 +117,76 @@ describe('SpaceClient contract events against a mocked SPACE', () => {
     client.disconnectWebSocket();
 
     await waitUntil(() => space.contractSockets.length === 0);
+  });
+
+  it('Should send organizationId in the handshake for member user keys', async () => {
+    const client = newClient(USER_KEY, 'org-1');
+    const received = new Promise<ContractEventDetails>((resolve) =>
+      client.on('contract_created', (data) => resolve(data)),
+    );
+    await waitUntil(() => space.contractSockets.length === 1);
+
+    expect(space.handshakes[0]).toEqual({ apiKey: USER_KEY, organizationId: 'org-1' });
+    const details = { userId: 'u', organizationId: 'org-1', contractVersion: '1:x', services: [] };
+    space.emitContractEvent('CONTRACT_CREATED', details);
+    expect(await received).toEqual(details);
+  });
+
+  it('Should report a user-key handshake without organizationId as an error event', async () => {
+    const client = newClient(USER_KEY);
+    const error = new Promise<any>((resolve) => client.on('error', (e) => resolve(e)));
+    client.on('contract_novated', () => undefined);
+
+    expect((await error).message).toMatch(/organizationId/);
+  });
+
+  it('Should deliver contract_deleted with a null contractVersion', async () => {
+    const client = newClient();
+    const received = new Promise<ContractEventDetails>((resolve) =>
+      client.on('contract_deleted', (data) => resolve(data)),
+    );
+    await waitUntil(() => space.contractSockets.length === 1);
+
+    const details: ContractEventDetails = {
+      userId: 'user-1',
+      organizationId: 'org-1',
+      contractVersion: null,
+      services: ['acme'],
+    };
+    space.emitContractEvent('CONTRACT_DELETED', details);
+
+    expect((await received).contractVersion).toBeNull();
+    expectTypeOf<ContractEventDetails['contractVersion']>().toEqualTypeOf<string | null>();
+  });
+
+  it('Should keep the namespace open while any contract listener remains', async () => {
+    const client = newClient();
+    const a = () => undefined;
+    const b = () => undefined;
+    client.on('contract_novated', a);
+    client.on('contract_novated', b);
+    client.on('contract_created', a);
+    await waitUntil(() => space.contractSockets.length === 1);
+
+    client.off('contract_novated', a);
+    client.off('contract_created');
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(space.contractSockets).toHaveLength(1);
+
+    client.off('contract_novated', b);
+    await waitUntil(() => space.contractSockets.length === 0);
+  });
+
+  it('Should track contract listeners itself, not through the emitter internals', async () => {
+    const client = newClient();
+    client.on('contract_renewed', () => undefined);
+    await waitUntil(() => space.contractSockets.length === 1);
+
+    // Whatever TinyEmitter keeps privately must not matter.
+    (client as any).emitter.e = {};
+    client.off('pricing_created');
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    expect(space.contractSockets).toHaveLength(1);
   });
 });

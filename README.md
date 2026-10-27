@@ -163,6 +163,7 @@ export function InjectTokenFromServer() {
     - `config: SpaceConfiguration`  
       - `url: string` — SPACE instance URL  
       - `apiKey: string` — Authentication key emitted by SPACE
+      - `organizationId?: string` — Only for member user keys (`usr_...`): sent with the contract events handshake
       - `allowConnectionWithSpace: boolean` — If `false`, event listeners take no effect (default: `true`)
     - `children: React.ReactNode`  
 
@@ -251,13 +252,13 @@ Contract events include:
 {
   userId: string;
   organizationId: string;
-  contractVersion: string; // version of the contract after the change
+  contractVersion: string | null; // version of the contract after the change; null for contract_deleted
   services: string[];      // services affected
 }
 ```
 
 > [!IMPORTANT]
-> Contract events travel over SPACE's authenticated `/contracts` namespace. The client opens it (sending `apiKey` in the handshake) only when you register the first contract listener, and closes it when the last one is removed. They therefore **only work when the client connects to SPACE with an API key** (`allowConnectionWithSpace: true`).
+> Contract events travel over SPACE's authenticated `/contracts` namespace. The client opens it only when you register the first contract listener, and closes it when the last one is removed. The handshake carries `{ apiKey }` for an organisation key, or `{ apiKey, organizationId }` when the configuration has `organizationId` (SPACE requires it for member user keys, `usr_...`). They therefore **only work when the client connects to SPACE with an API key** (`allowConnectionWithSpace: true`).
 >
 > **Token-only apps** (`allowConnectionWithSpace: false`, the recommended production setup, since the browser holds no SPACE key) do not receive contract events. Let your backend listen to them with [`space-node-client`](https://github.com/Alex-GF/space-node-client) (`client.on('contract_novated', ...)`) and push a fresh Pricing Token to the user's sessions (or have the page refetch it after a plan change). `useSubscription()` and `<Feature>` update as soon as `tokenService.update(newToken)` runs.
 

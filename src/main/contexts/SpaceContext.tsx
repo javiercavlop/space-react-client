@@ -30,7 +30,7 @@ export const SpaceProvider = ({
       client: client,
       tokenService: tokenService,
     };
-  }, [config.url, config.apiKey, config.allowConnectionWithSpace]);
+  }, [config.url, config.apiKey, config.organizationId, config.allowConnectionWithSpace]);
 
   useEffect(() => {
     return () => {

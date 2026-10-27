@@ -27,6 +27,12 @@ export type ContractEvents =
 export interface SpaceConfiguration {
   url: string;
   apiKey: string;
+  /**
+   * Organisation of a member user key (`usr_...`). Sent with the handshake of the contract events
+   * namespace (`{ apiKey, organizationId }`), which SPACE requires for user keys. Not needed for
+   * organisation keys.
+   */
+  organizationId?: string;
   allowConnectionWithSpace: boolean
 }
 

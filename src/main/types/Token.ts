@@ -36,6 +36,6 @@ export interface PricingTokenPayload {
   subscriptionContext?: Record<string, any>;
   /** Present only in tokens issued by SPACE versions that include the subscription. */
   subscription?: PricingTokenSubscription;
-  /** Other claims are kept as they come. */
-  [claim: string]: any;
+  /** Other claims are kept as they come; narrow them before use. */
+  [claim: string]: unknown;
 }

@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, expectTypeOf } from 'vitest';
 import { render, screen, act } from '@testing-library/react';
 import { SpaceContext } from '@/contexts/SpaceContext';
 import { TokenService } from '@/services/token';
@@ -107,5 +107,14 @@ describe('TokenService.getSubscription', () => {
     expect(ts.getSubscription()).toEqual(subscription);
     ts.update(tokenWith({}));
     expect(ts.getSubscription()).toBeNull();
+  });
+});
+
+describe('PricingTokenPayload type', () => {
+  it('types unknown claims as unknown, not any', () => {
+    expectTypeOf<PricingTokenPayload['someFutureClaim']>().toEqualTypeOf<unknown>();
+    expectTypeOf<PricingTokenPayload['subscription']>().toEqualTypeOf<
+      PricingTokenSubscription | undefined
+    >();
   });
 });

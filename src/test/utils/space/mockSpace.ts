@@ -8,14 +8,21 @@ import { Server as SocketIOServer, type Socket } from 'socket.io';
  */
 export class MockSpaceEvents {
   public io!: SocketIOServer;
-  public readonly handshakes: { apiKey?: string }[] = [];
+  public readonly handshakes: { apiKey?: string; organizationId?: string }[] = [];
   public contractSockets: Socket[] = [];
   private server = http.createServer((_req, res) => {
     res.writeHead(404);
     res.end();
   });
 
-  constructor(private readonly validApiKey: string) {}
+  /**
+   * @param validApiKey The organisation key accepted alone.
+   * @param userApiKey A member user key (`usr_...`), accepted only with `auth.organizationId`.
+   */
+  constructor(
+    private readonly validApiKey: string,
+    private readonly userApiKey?: string,
+  ) {}
 
   get url(): string {
     const { port } = this.server.address() as AddressInfo;
@@ -28,7 +35,13 @@ export class MockSpaceEvents {
     const contracts = this.io.of('/contracts');
     contracts.use((socket, next) => {
       const apiKey = socket.handshake.auth?.apiKey;
-      this.handshakes.push({ apiKey });
+      const organizationId = socket.handshake.auth?.organizationId;
+      this.handshakes.push(organizationId === undefined ? { apiKey } : { apiKey, organizationId });
+      if (this.userApiKey !== undefined && apiKey === this.userApiKey) {
+        return organizationId
+          ? next()
+          : next(new Error('organizationId is required for user keys'));
+      }
       if (apiKey !== this.validApiKey) {
         return next(new Error('Invalid API key'));
       }
@@ -50,7 +63,7 @@ export class MockSpaceEvents {
     }
   }
 
-  emitContractEvent(code: string, details: Record<string, unknown>) {
+  emitContractEvent(code: string, details: object) {
     this.io.of('/contracts').emit('message', { code, details });
   }
 

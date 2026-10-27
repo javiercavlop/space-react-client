@@ -13,7 +13,8 @@ export interface EventMessage {
 export interface ContractEventDetails {
   userId: string;
   organizationId: string;
-  contractVersion: string;
+  /** The `contractVersion` after the change; `null` for `contract_deleted`. */
+  contractVersion: string | null;
   services: string[];
 }
 
